@@ -1,0 +1,16 @@
+{
+  "name": "yourlover",
+  "version": "1.0.0",
+  "description": "理想型测试 - 这是一个基于心理学用于测试理想型的项目",
+  "private": true,
+  "scripts": {
+    "dev": "serve .",
+    "build": "echo 'No build step required for static HTML'"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@vercel/analytics": "^2.0.1"
+  }
+}

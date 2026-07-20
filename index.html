@@ -835,7 +835,7 @@ const QUESTIONS = [
     options:[
       {t:'第一时间共情，把我的感受放在首位', v:{A:2}},
       {t:'愿意倾听，也会给出理性的建议', v:{A:1}},
-      {t:'给我空间，相信我能自己调节', v:{A:-1}},
+      {t:'给我空间，相信我能��己调节', v:{A:-1}},
       {t:'直接一点，甚至可以适度"逆耳忠言"', v:{A:-2}},
     ]},
   {section:'B', multi:false, text:'面对压力和突发状况，你希望伴侣的情绪状态是？', sub:'对应"情绪稳定性"维度（反向计分神经质）',
@@ -965,7 +965,7 @@ const QUESTIONS = [
       {t:'各自独立管理，互不干涉对方花销', v:{independence:2}},
       {t:'愿意为彼此的梦想投入，哪怕有风险', v:{growth:1, support:1}},
     ]},
-  {section:'D', multi:false, text:'如果伴侣有一个能实现自我但需要长期分居/牺牲陪伴的重大机会，你的态度是？',
+  {section:'D', multi:false, text:'如果伴侣有一个能实现自我但需要长期分���/牺牲陪伴的重大机会，你的态度是？',
     options:[
       {t:'全力支持，个人成长比朝夕相伴更重要', v:{growth:2, independence:1}},
       {t:'支持，但希望TA优先考虑我们的关系', v:{support:1, family:1}},
@@ -1617,5 +1617,9 @@ function restartQuiz(){
 // 页面加载即检测是否有未完成的测评进度
 checkResumeOnLoad();
 </script>
+<script>
+  window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
+</script>
+<script defer src="/_vercel/insights/script.js"></script>
 </body>
 </html>
