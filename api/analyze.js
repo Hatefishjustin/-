@@ -2,26 +2,32 @@
  * Vercel Serverless Function
  * 路径: /api/analyze
  *
- * 作用：接收前端传来的"理想伴侣测评"原始作答记录，转发给 DeepSeek API 做
- * 专业心理学角度的深度解读，再把结果返回给前端。
+ * 作用：接收前端传来的"理想伴侣测评"原始作答记录，转发给阿里云百炼（DashScope）
+ * 的通义千问模型做专业心理学角度的深度解读，再把结果返回给前端。
+ *
+ * 为什么这么设计：
+ * - 阿里云百炼提供 OpenAI 兼容的 Chat Completions 接口，调用方式和其他主流平台一致。
+ * - 服务器在国内，国内用户访问速度和稳定性都比调用国外接口好很多。
+ * - 新用户开通百炼有一次性 7000万 Tokens 免费额度（每个模型各100万，长期有效），
+ *   本项目这种"测完一次问卷分析一次"的调用量，免费额度可以用很久。
  *
  * 安全设计：
- * - DeepSeek API Key 只存在于 Vercel 的环境变量（process.env.DEEPSEEK_API_KEY），
+ * - API Key 只存在于 Vercel 的环境变量（process.env.DASHSCOPE_API_KEY），
  *   永远不会出现在发给浏览器的任何代码或响应里。
  * - 对请求体大小、字段类型做校验，避免被滥用当作免费文本转发代理。
- * - 对 DeepSeek 侧的常见错误（key无效/额度耗尽/超时）做区分，给前端明确的错误码，
- *   方便展示对用户有意义的提示而不是一个干巴巴的"出错了"。
+ * - 简单的同 IP 节流，避免个别用户短时间连点"重新生成"把免费额度很快刷完。
+ *   这是单实例内存级节流，不是跨实例精确限流，只作为基础防护。
  */
 
+const lastRequestByIp = new Map();
+const THROTTLE_WINDOW_MS = 20 * 1000; // 同一 IP 20 秒内最多 1 次请求
+
 export default async function handler(req, res) {
-  // 只允许 POST
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'method_not_allowed', message: '仅支持 POST 请求' });
   }
 
-  // 简单的 CORS：只需要同源前端调用即可，这里保留基础头部，
-  // 如果你的前端和这个函数部署在同一个 Vercel 项目下（推荐做法），实际上不需要额外配置。
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -29,12 +35,23 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
-  const apiKey = process.env.DEEPSEEK_API_KEY;
+  // 基础节流：防止短时间连续点击把免费额度刷完
+  const ip = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown').split(',')[0].trim();
+  const now = Date.now();
+  const last = lastRequestByIp.get(ip);
+  if (last && now - last < THROTTLE_WINDOW_MS) {
+    return res.status(429).json({
+      error: 'rate_limited',
+      message: '请求太频繁了，请等待几秒后再试一次。',
+    });
+  }
+  lastRequestByIp.set(ip, now);
+
+  const apiKey = process.env.DASHSCOPE_API_KEY;
   if (!apiKey) {
-    // Key 没在 Vercel 环境变量里配置好
     return res.status(500).json({
       error: 'missing_api_key',
-      message: '服务器未配置 DeepSeek API Key，请在 Vercel 项目设置的环境变量中添加 DEEPSEEK_API_KEY。',
+      message: '服务器未配置阿里云百炼 API Key，请在 Vercel 项目设置的环境变量中添加 DASHSCOPE_API_KEY。',
     });
   }
 
@@ -63,19 +80,20 @@ export default async function handler(req, res) {
 7. 不要输出任何免责声明、道歉或"我不是专业人士"之类的话——你在这个场景中扮演专业角色即可；但也不要给出临床诊断式的断言。`;
 
   try {
-    const upstream = await fetch('https://api.deepseek.com/chat/completions', {
+    const upstream = await fetch('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: 'deepseek-v4-flash',
+        // qwen-flash：速度快、性价比高，适合这种单次分析任务。
+        // 如果想要更强的分析深度，可以换成 "qwen-plus"（同样在免费额度范围内，各模型额度独立）。
+        model: 'qwen-flash',
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: rawText },
         ],
-        thinking: { type: 'disabled' },
         stream: false,
         temperature: 1.0,
         max_tokens: 2000,
@@ -84,10 +102,10 @@ export default async function handler(req, res) {
 
     if (!upstream.ok) {
       const errBody = await upstream.text().catch(() => '');
-      let message = 'DeepSeek 接口调用失败';
-      if (upstream.status === 401) message = 'API Key 无效或已过期，请检查 Vercel 环境变量中的 DEEPSEEK_API_KEY';
-      else if (upstream.status === 429) message = 'DeepSeek 请求过于频繁或额度已用尽，请稍后再试';
-      else if (upstream.status >= 500) message = 'DeepSeek 服务暂时不可用，请稍后再试';
+      let message = '阿里云百炼接口调用失败';
+      if (upstream.status === 401) message = 'API Key 无效或已过期，请检查 Vercel 环境变量中的 DASHSCOPE_API_KEY';
+      else if (upstream.status === 429) message = '请求过于频繁或免费额度已用尽，请稍后再试';
+      else if (upstream.status >= 500) message = '阿里云百炼服务暂时不可用，请稍后再试';
 
       return res.status(upstream.status === 401 ? 500 : upstream.status).json({
         error: 'upstream_error',
@@ -107,7 +125,7 @@ export default async function handler(req, res) {
   } catch (err) {
     return res.status(504).json({
       error: 'network_error',
-      message: '连接 DeepSeek 服务超时或失败，请稍后重试',
+      message: '连接阿里云百炼服务超时或失败，请稍后重试',
       detail: String(err && err.message || err),
     });
   }
