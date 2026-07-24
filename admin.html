@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>心镜 · 后台数据看板</title>
+<style>
+/* 复用系统自带字体栈，不依赖任何外部字体服务（国内网络无法访问 Google Fonts） */
+:root{
+  --font-serif: 'Songti SC','STSong','SimSun',serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', Arial, sans-serif;
+  --font-mono: 'SFMono-Regular', Consolas, monospace;
+
+  --bg:#000000;
+  --surface:#141416;
+  --surface-hover:#1C1C1F;
+  --hairline:rgba(255,255,255,0.08);
+  --hairline-strong:rgba(255,255,255,0.14);
+  --text-primary:rgba(255,255,255,0.96);
+  --text-secondary:rgba(255,255,255,0.62);
+  --text-tertiary:rgba(255,255,255,0.38);
+  --accent:#FF3B5C;
+  --accent-dim:#C4293F;
+  --accent-soft:rgba(255,59,92,0.10);
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{
+  background:var(--bg);
+  color:var(--text-primary);
+  font-family:var(--font-sans);
+  min-height:100vh;
+  padding:32px 20px 80px;
+}
+.wrap{max-width:920px;margin:0 auto;}
+
+header{margin-bottom:32px;}
+header h1{
+  font-family:var(--font-serif);
+  font-size:26px;
+  font-weight:700;
+  margin-bottom:6px;
+}
+header .sub{font-size:13px;color:var(--text-tertiary);}
+
+.state-box{
+  text-align:center;
+  padding:80px 20px;
+  color:var(--text-secondary);
+  font-size:14px;
+  line-height:1.9;
+}
+.state-box .err-title{
+  font-family:var(--font-serif);
+  font-size:18px;
+  color:var(--accent);
+  margin-bottom:10px;
+}
+.hidden{display:none !important;}
+
+.stat-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fit, minmax(150px, 1fr));
+  gap:12px;
+  margin-bottom:32px;
+}
+.stat-card{
+  background:var(--surface);
+  border:1px solid var(--hairline);
+  border-radius:10px;
+  padding:18px 18px 16px;
+}
+.stat-card .label{
+  font-size:12px;
+  color:var(--text-tertiary);
+  margin-bottom:8px;
+}
+.stat-card .value{
+  font-family:var(--font-mono);
+  font-size:28px;
+  font-weight:600;
+  color:var(--text-primary);
+}
+.stat-card .value.accent{color:var(--accent);}
+.stat-card .delta{
+  font-size:11.5px;
+  margin-top:6px;
+  color:var(--text-tertiary);
+}
+.stat-card .delta.up{color:#4ADE80;}
+.stat-card .delta.down{color:var(--accent);}
+
+.section{margin-bottom:32px;}
+.section-title{
+  font-family:var(--font-serif);
+  font-size:16px;
+  margin-bottom:14px;
+  color:var(--text-primary);
+}
+
+.breakdown-list{display:flex;flex-direction:column;gap:8px;}
+.breakdown-row{
+  display:flex;align-items:center;gap:12px;
+  font-size:13px;
+}
+.breakdown-row .name{width:120px;color:var(--text-secondary);flex-shrink:0;}
+.breakdown-row .bar-track{
+  flex:1;height:8px;background:var(--hairline);border-radius:100px;overflow:hidden;
+}
+.breakdown-row .bar-fill{height:100%;background:var(--accent);border-radius:100px;}
+.breakdown-row .count{width:40px;text-align:right;color:var(--text-tertiary);font-family:var(--font-mono);flex-shrink:0;}
+
+table{width:100%;border-collapse:collapse;font-size:13px;}
+table th{
+  text-align:left;
+  font-weight:500;
+  color:var(--text-tertiary);
+  font-size:11.5px;
+  padding:8px 10px;
+  border-bottom:1px solid var(--hairline-strong);
+}
+table td{
+  padding:10px 10px;
+  border-bottom:1px solid var(--hairline);
+  color:var(--text-secondary);
+}
+table tr:last-child td{border-bottom:none;}
+table td.mono{font-family:var(--font-mono);color:var(--text-tertiary);font-size:12px;}
+
+.refresh-btn{
+  background:var(--accent-soft);
+  border:1px solid rgba(255,59,92,0.32);
+  color:var(--accent);
+  font-family:var(--font-sans);
+  font-size:12.5px;
+  padding:8px 16px;
+  border-radius:100px;
+  cursor:pointer;
+  transition:all .2s ease;
+}
+.refresh-btn:hover{background:rgba(255,59,92,0.18);}
+
+.footer-note{
+  margin-top:40px;
+  font-size:11px;
+  color:var(--text-tertiary);
+  text-align:center;
+  opacity:0.6;
+}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <h1>后台数据看板</h1>
+    <div class="sub" id="headerSub">正在加载…</div>
+  </header>
+
+  <div id="stateBox" class="state-box hidden"></div>
+  <div id="dashboard" class="hidden"></div>
+
+  <p class="footer-note">Powered by Justin</p>
+</div>
+
+<script>
+function escapeHtml(str){
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function formatDate(ms){
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+}
+
+const quizTypeLabels = {
+  ideal_partner: '理想伴侣测评',
+};
+function quizTypeLabel(type){
+  return quizTypeLabels[type] || type;
+}
+
+async function loadStats(){
+  const stateBox = document.getElementById('stateBox');
+  const dashboard = document.getElementById('dashboard');
+  const headerSub = document.getElementById('headerSub');
+
+  stateBox.classList.add('hidden');
+  dashboard.classList.add('hidden');
+  headerSub.textContent = '正在加载…';
+
+  try{
+    const resp = await fetch('/admin/stats');
+    const data = await resp.json();
+
+    if(resp.status === 403){
+      stateBox.innerHTML = `
+        <div class="err-title">无权限访问</div>
+        <p>这个页面只有管理员账号能看。<br>请先在主站用你的邮箱登录，然后在 D1 控制台把你的账号设为管理员：</p>
+        <p style="margin-top:14px;font-family:'SFMono-Regular',Consolas,monospace;font-size:12px;color:var(--accent);">
+          UPDATE users SET is_admin = 1 WHERE email = '你的邮箱';
+        </p>
+      `;
+      stateBox.classList.remove('hidden');
+      headerSub.textContent = '未授权';
+      return;
+    }
+
+    if(!resp.ok){
+      stateBox.innerHTML = `
+        <div class="err-title">加载失败</div>
+        <p>${escapeHtml(data.message || '未知错误')}</p>
+      `;
+      stateBox.classList.remove('hidden');
+      headerSub.textContent = '出错了';
+      return;
+    }
+
+    renderDashboard(data);
+    headerSub.textContent = '数据截至 ' + formatDate(data.generatedAt);
+    dashboard.classList.remove('hidden');
+  }catch(e){
+    stateBox.innerHTML = `<div class="err-title">网络错误</div><p>请检查网络后重试</p>`;
+    stateBox.classList.remove('hidden');
+    headerSub.textContent = '出错了';
+  }
+}
+
+function renderDashboard(data){
+  const dashboard = document.getElementById('dashboard');
+
+  const growth = data.growth.growthPct;
+  let growthHtml;
+  if(growth === null){
+    growthHtml = `<div class="delta">近14天数据不足，暂无法计算增长率</div>`;
+  } else {
+    const cls = growth >= 0 ? 'up' : 'down';
+    const sign = growth >= 0 ? '+' : '';
+    growthHtml = `<div class="delta ${cls}">${sign}${growth}% 环比过去7天</div>`;
+  }
+
+  const maxBreakdownCount = Math.max(1, ...data.quizTypeBreakdown.map(b => b.count));
+
+  dashboard.innerHTML = `
+    <div class="stat-grid">
+      <div class="stat-card">
+        <div class="label">今日新增用户</div>
+        <div class="value accent">${data.today.newUsers}</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">今日完成测试</div>
+        <div class="value accent">${data.today.completedTests}</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">累计注册用户</div>
+        <div class="value">${data.totals.users}</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">累计完成测试</div>
+        <div class="value">${data.totals.records}</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">过去7天新增</div>
+        <div class="value">${data.growth.last7dNewUsers}</div>
+        ${growthHtml}
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">热门测试</div>
+      <div class="breakdown-list">
+        ${data.quizTypeBreakdown.length === 0
+          ? `<div style="color:var(--text-tertiary);font-size:13px;">还没有任何完成记录</div>`
+          : data.quizTypeBreakdown.map(b => `
+            <div class="breakdown-row">
+              <div class="name">${escapeHtml(quizTypeLabel(b.quizType))}</div>
+              <div class="bar-track"><div class="bar-fill" style="width:${Math.round(b.count/maxBreakdownCount*100)}%"></div></div>
+              <div class="count">${b.count}</div>
+            </div>
+          `).join('')}
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">最近注册（近10位）</div>
+      <table>
+        <thead><tr><th>邮箱</th><th>注册时间</th></tr></thead>
+        <tbody>
+          ${data.recentUsers.length === 0
+            ? `<tr><td colspan="2" style="color:var(--text-tertiary);">暂无数据</td></tr>`
+            : data.recentUsers.map(u => `
+              <tr><td>${escapeHtml(u.email)}</td><td class="mono">${formatDate(u.createdAt)}</td></tr>
+            `).join('')}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <div class="section-title">最近完成的测试（近10条）</div>
+      <table>
+        <thead><tr><th>用户</th><th>测试类型</th><th>结果摘要</th><th>时间</th></tr></thead>
+        <tbody>
+          ${data.recentRecords.length === 0
+            ? `<tr><td colspan="4" style="color:var(--text-tertiary);">暂无数据</td></tr>`
+            : data.recentRecords.map(r => `
+              <tr>
+                <td>${escapeHtml(r.email)}</td>
+                <td>${escapeHtml(quizTypeLabel(r.quizType))}</td>
+                <td>${escapeHtml(r.headline)}</td>
+                <td class="mono">${formatDate(r.createdAt)}</td>
+              </tr>
+            `).join('')}
+        </tbody>
+      </table>
+    </div>
+
+    <button class="refresh-btn" onclick="loadStats()">刷新数据</button>
+  `;
+}
+
+loadStats();
+</script>
+</body>
+</html>
