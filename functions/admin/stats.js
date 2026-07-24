@@ -10,7 +10,11 @@
  * 依赖：
  * - D1 数据库绑定 DB（跟其他 Functions 共用同一个数据库）
  * - db/migration_admin.sql 必须已经在 D1 控制台执行过
- *   （users.is_admin 和 records.quiz_type 这两个字段来自这次迁移）
+ *   （users.is_admin 字段来自这次迁移）
+ * - db/migration_completions.sql 必须已经在 D1 控制台执行过
+ *   （completions 表来自这次迁移，用于统计包含匿名访客在内的真实完成量；
+ *   注意这里"完成测试"相关的所有数字都来自 completions 表，而不是 records 表——
+ *   records 表只包含登录用户主动保存的记录，会严重低估真实使用量）
  */
 
 function parseCookie(cookieHeader, name) {
@@ -61,46 +65,52 @@ export const onRequestGet = async ({ request, env }) => {
   try {
     const [
       totalUsersRow,
-      totalRecordsRow,
+      totalCompletionsRow,
       todayUsersRow,
-      todayRecordsRow,
+      todayCompletionsRow,
       last7dUsersRow,
       prev7dUsersRow,
       quizTypeBreakdown,
       recentUsers,
-      recentRecords,
+      recentCompletions,
+      anonCompletionsRow,
     ] = await Promise.all([
       env.DB.prepare('SELECT COUNT(*) as cnt FROM users').first(),
-      env.DB.prepare('SELECT COUNT(*) as cnt FROM records').first(),
+      env.DB.prepare('SELECT COUNT(*) as cnt FROM completions').first(),
       env.DB.prepare('SELECT COUNT(*) as cnt FROM users WHERE created_at >= ?').bind(todayStartMs).first(),
-      env.DB.prepare('SELECT COUNT(*) as cnt FROM records WHERE created_at >= ?').bind(todayStartMs).first(),
+      env.DB.prepare('SELECT COUNT(*) as cnt FROM completions WHERE created_at >= ?').bind(todayStartMs).first(),
       env.DB.prepare('SELECT COUNT(*) as cnt FROM users WHERE created_at >= ?').bind(sevenDaysAgoMs).first(),
       env.DB.prepare('SELECT COUNT(*) as cnt FROM users WHERE created_at >= ? AND created_at < ?').bind(fourteenDaysAgoMs, sevenDaysAgoMs).first(),
-      env.DB.prepare('SELECT quiz_type, COUNT(*) as cnt FROM records GROUP BY quiz_type ORDER BY cnt DESC').all(),
+      env.DB.prepare('SELECT quiz_type, COUNT(*) as cnt FROM completions GROUP BY quiz_type ORDER BY cnt DESC').all(),
       env.DB.prepare('SELECT email, created_at FROM users ORDER BY created_at DESC LIMIT 10').all(),
       env.DB.prepare(
-        `SELECT records.headline as headline, records.created_at as created_at, records.quiz_type as quiz_type, users.email as email
-         FROM records JOIN users ON records.user_id = users.id
-         ORDER BY records.created_at DESC LIMIT 10`
+        `SELECT completions.headline as headline, completions.created_at as created_at, completions.quiz_type as quiz_type, users.email as email
+         FROM completions LEFT JOIN users ON completions.user_id = users.id
+         ORDER BY completions.created_at DESC LIMIT 10`
       ).all(),
+      env.DB.prepare('SELECT COUNT(*) as cnt FROM completions WHERE user_id IS NULL').first(),
     ]);
 
     const last7d = last7dUsersRow?.cnt || 0;
     const prev7d = prev7dUsersRow?.cnt || 0;
-    let growthPct = null; // null 表示样本太少，不适合算百分比
+    let growthPct = null;
     if (prev7d > 0) {
       growthPct = Math.round(((last7d - prev7d) / prev7d) * 1000) / 10;
     }
+
+    const totalCompletions = totalCompletionsRow?.cnt || 0;
+    const anonCompletions = anonCompletionsRow?.cnt || 0;
 
     return jsonResponse({
       generatedAt: now,
       totals: {
         users: totalUsersRow?.cnt || 0,
-        records: totalRecordsRow?.cnt || 0,
+        completions: totalCompletions,
+        anonCompletions,
       },
       today: {
         newUsers: todayUsersRow?.cnt || 0,
-        completedTests: todayRecordsRow?.cnt || 0,
+        completedTests: todayCompletionsRow?.cnt || 0,
       },
       growth: {
         last7dNewUsers: last7d,
@@ -109,7 +119,7 @@ export const onRequestGet = async ({ request, env }) => {
       },
       quizTypeBreakdown: (quizTypeBreakdown.results || []).map(r => ({ quizType: r.quiz_type, count: r.cnt })),
       recentUsers: (recentUsers.results || []).map(r => ({ email: r.email, createdAt: r.created_at })),
-      recentRecords: (recentRecords.results || []).map(r => ({
+      recentRecords: (recentCompletions.results || []).map(r => ({
         email: r.email,
         headline: r.headline,
         quizType: r.quiz_type,
@@ -119,7 +129,7 @@ export const onRequestGet = async ({ request, env }) => {
   } catch (err) {
     return jsonResponse({
       error: 'query_failed',
-      message: '统计查询失败：' + String(err?.message || err) + '（可能是 db/migration_admin.sql 还没执行）',
+      message: '统计查询失败：' + String(err?.message || err) + '（可能是 db/migration_admin.sql 或 db/migration_completions.sql 还没执行）',
     }, 500);
   }
 };
